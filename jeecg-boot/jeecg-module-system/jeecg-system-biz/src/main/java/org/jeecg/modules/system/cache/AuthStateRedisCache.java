@@ -1,12 +1,19 @@
 package org.jeecg.modules.system.cache;
 
 import jakarta.annotation.PostConstruct;
+import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import me.zhyd.oauth.cache.AuthCacheConfig;
 import me.zhyd.oauth.cache.AuthStateCache;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 
+import java.util.Collections;
+import java.util.Locale;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 
@@ -65,5 +72,44 @@ public class AuthStateRedisCache implements AuthStateCache {
     @Override
     public boolean containsKey(String key) {
         return redisTemplate.hasKey(key);
+    }
+
+    public void cacheBrowserState(String source, String state, HttpServletRequest request, HttpServletResponse response) {
+        Cookie cookie = new Cookie("thirdLoginState_" + state, UUID.randomUUID().toString());
+        cookie.setHttpOnly(true);
+        cookie.setSecure(request.isSecure());
+        cookie.setAttribute("SameSite", "Lax");
+        cookie.setPath("/");
+        cache("thirdLoginState::" + source.toLowerCase(Locale.ROOT) + "::" + state, cookie.getValue());
+        response.addCookie(cookie);
+    }
+
+    public boolean consumeBrowserState(String source, String state, HttpServletRequest request, HttpServletResponse response) {
+        Cookie[] cookies = request.getCookies();
+        if (state == null || state.isEmpty() || cookies == null || response == null) {
+            return false;
+        }
+        Cookie stateCookie = null;
+        for (Cookie cookie : cookies) {
+            if (("thirdLoginState_" + state).equals(cookie.getName())) {
+                if (stateCookie != null) {
+                    return false;
+                }
+                stateCookie = cookie;
+            }
+        }
+        if (stateCookie == null) {
+            return false;
+        }
+        Long consumed = redisTemplate.execute(new DefaultRedisScript<>(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+                Long.class), Collections.singletonList("thirdLoginState::" + source.toLowerCase(Locale.ROOT) + "::" + state), stateCookie.getValue());
+        stateCookie.setHttpOnly(true);
+        stateCookie.setSecure(request.isSecure());
+        stateCookie.setAttribute("SameSite", "Lax");
+        stateCookie.setPath("/");
+        stateCookie.setMaxAge(0);
+        response.addCookie(stateCookie);
+        return Long.valueOf(1).equals(consumed);
     }
 }
