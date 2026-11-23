@@ -7,6 +7,7 @@ import com.xxl.job.admin.business.model.XxlJobLogGlue;
 import com.xxl.job.admin.framework.util.I18nUtil;
 import com.xxl.job.admin.framework.util.JobGroupPermissionUtil;
 import com.xxl.job.admin.framework.util.XssUtil;
+import com.xxl.job.admin.framework.web.xxlsso.XxlSsoConfig;
 import com.xxl.job.core.glue.GlueTypeEnum;
 import com.xxl.sso.core.model.LoginInfo;
 import com.xxl.tool.core.StringTool;
@@ -19,6 +20,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 
@@ -63,12 +65,16 @@ public class JobCodeController {
 		return "business/job.code";
 	}
 	
-	@RequestMapping("/save")
+	@RequestMapping(value="/save", method=RequestMethod.POST)
 	@ResponseBody
 	public Response<String> save(HttpServletRequest request,
 								 @RequestParam("id") int id,
 								 @RequestParam("glueSource") String glueSource,
 								 @RequestParam("glueRemark") String glueRemark) {
+
+		if (!XxlSsoConfig.isValidCsrfRequest(request)) {
+			return Response.ofFail(I18nUtil.getString("system_invalid"));
+		}
 
 		// valid
 		if (StringTool.isBlank(glueSource)) {
