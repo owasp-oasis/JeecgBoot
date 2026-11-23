@@ -21,6 +21,7 @@ import org.jeecg.common.system.api.ISysBaseAPI;
 import org.jeecg.common.system.util.JwtUtil;
 import org.jeecg.common.util.*;
 import org.jeecg.modules.base.service.BaseCommonService;
+import org.jeecg.modules.system.cache.AuthStateRedisCache;
 import org.jeecg.modules.system.entity.SysDepart;
 import org.jeecg.modules.system.entity.SysThirdAccount;
 import org.jeecg.modules.system.entity.SysThirdAppConfig;
@@ -117,6 +118,7 @@ public class ThirdLoginController {
             //update-end---author:liusq ---date:2026-05-15  for：【QQYUN-12767】飞书扫码登录改用yml配置，兼容tenantId为null的情况-----------
             String redirectUri = CommonUtils.getBaseUrl(request) + "/sys/thirdLogin/feishu/callback";
             String authorizeUrl = thirdAppFeishuService.buildAuthorizeUrl(feishuConfig, redirectUri, state);
+            SpringContextUtils.getBean("authStateCache", AuthStateRedisCache.class).cacheBrowserState(CommonConstant.FEISHU, state, request, response);
             log.info("飞书登录认证地址：{}", authorizeUrl);
             response.sendRedirect(authorizeUrl);
             return;
@@ -134,13 +136,28 @@ public class ThirdLoginController {
         }
         //update-end---author:scott ---date:2026-06-04  for：【第三方登录NPE加固】source未在justauth.type中配置时直接拦截，避免JustAuth-starter1.4.0的get()未判空getExtend()抛出空指针-----------
         AuthRequest authRequest = factory.get(source);
-        String authorizeUrl = authRequest.authorize(AuthStateUtils.createState());
+        String state = AuthStateUtils.createState();
+        String authorizeUrl = authRequest.authorize(state);
+        SpringContextUtils.getBean("authStateCache", AuthStateRedisCache.class).cacheBrowserState(source, state, request, response);
         log.info("第三方登录认证地址：" + authorizeUrl);
         response.sendRedirect(authorizeUrl);
     }
 
-	@RequestMapping("/{source}/callback")
+	@RequestMapping(value = "/{source}/callback", method = {RequestMethod.GET, RequestMethod.POST})
     public String loginThird(@PathVariable("source") String source, AuthCallback callback,ModelMap modelMap, HttpServletRequest request) {
+		String state = callback == null ? null : callback.getState();
+		String stateSource = CommonConstant.FEISHU.equalsIgnoreCase(source) || ThirdAppFeishuServiceImpl.THIRD_TYPE.equalsIgnoreCase(source)
+				? CommonConstant.FEISHU : source;
+		boolean validState = false;
+		try {
+			validState = SpringContextUtils.getBean("authStateCache", AuthStateRedisCache.class).consumeBrowserState(stateSource, state, request, SpringContextUtils.getHttpServletResponse());
+		} catch (RuntimeException e) {
+			log.warn("Third-party login state validation failed", e);
+		}
+		if (!validState) {
+			modelMap.addAttribute("token", "登录失败");
+			return "thirdLogin";
+		}
 		log.info("第三方登录进入callback：" + source + " params：" + JSONObject.toJSONString(callback));
         //update-begin---author:jeecg ---date:2026-05-13  for：【QQYUN-12767】飞书集成，手动调用飞书新版 OAuth2 API（绕过 JustAuth 废弃接口）-----------
         if (CommonConstant.FEISHU.equalsIgnoreCase(source) || ThirdAppFeishuServiceImpl.THIRD_TYPE.equalsIgnoreCase(source)) {
@@ -149,7 +166,7 @@ public class ThirdLoginController {
             try {
                 // 从state中解析租户ID（render时编码为 {tenantId}_{uuid} 格式）
                 Integer feishuTenantId = CommonConstant.TENANT_ID_DEFAULT_VALUE;
-                String stateParam = request.getParameter("state");
+                String stateParam = state;
                 if (stateParam != null && stateParam.contains("_")) {
                     try {
                         feishuTenantId = Integer.parseInt(stateParam.split("_", 2)[0]);
